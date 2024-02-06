@@ -136,7 +136,7 @@ func GetJavaStatus(host string, port uint16, opts *StatusOptions) (*JavaStatusRe
 	}
 
 	// Fetch the cached status if it exists
-	{
+	if config.Cache.EnableCache {
 		cache, ttl, err := r.Get(fmt.Sprintf("java:%s", cacheKey))
 
 		if err != nil {
@@ -183,7 +183,7 @@ func GetBedrockStatus(host string, port uint16, opts *StatusOptions) (*BedrockSt
 	}
 
 	// Fetch the cached status if it exists
-	{
+	if config.Cache.EnableCache {
 		cache, ttl, err := r.Get(fmt.Sprintf("bedrock:%s", cacheKey))
 
 		if err != nil {

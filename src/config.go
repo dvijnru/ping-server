@@ -18,6 +18,7 @@ var (
 		Redis:       nil,
 		Cache: ConfigCache{
 			EnableLocks:           true,
+			EnableCache:           true,
 			JavaStatusDuration:    time.Minute,
 			BedrockStatusDuration: time.Minute,
 			IconDuration:          time.Minute * 15,
@@ -37,6 +38,7 @@ type Config struct {
 // ConfigCache represents the caching durations of various responses.
 type ConfigCache struct {
 	EnableLocks           bool          `yaml:"enable_locks"`
+	EnableCache           bool          `yaml:"enable_cache"`
 	JavaStatusDuration    time.Duration `yaml:"java_status_duration"`
 	BedrockStatusDuration time.Duration `yaml:"bedrock_status_duration"`
 	IconDuration          time.Duration `yaml:"icon_duration"`

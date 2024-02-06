@@ -1,3 +1,4 @@
 bin/
+.idea
 config.yml
 .DS_Store
