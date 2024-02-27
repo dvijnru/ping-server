@@ -6,31 +6,31 @@ services:
     image: ping-server
     ports:
       - "3001:3001"
-    depends_on:
+    depends_on: # Указываем, что наш сервис ping-server зависит от сервиса с именем redis, перед запуском ping-server Docker будет убеждаться, что сервис redis уже запущен.
       - redis
-    networks:
+    networks: # Указываем, что оба сервиса будут подключены к сети с именем app_network, сеть app_network должна быть определена в другом месте в файле docker-compose.yml
       - app_network
-    environment:
-      REDIS_URL: "redis://redis:6379" # Define the Redis URL using the hostname of the Redis service
-    volumes:
+    environment: # Переменные окружения для контейнера ping-server
+      REDIS_URL: "redis://redis:6333" # Определите URL-адрес Redis, используя имя хоста службы Redis
+    volumes: # Монтируем файл config.yml из хоста внутрь контейнера по пути /app/config.yml, файл будет доступен только для чтения внутри контейнера
       - type: bind
-        source: ./config.example.yml
+        source: ./config.yml
         target: /app/config.yml
         read_only: true
 
   redis:
     image: "redis:latest"
-    command: ["redis-server", "--appendonly", "yes"]
+    command: ["redis-server", "--port 6333", "--appendonly", "yes"] # Указываем команду, которая будет выполнена при запуске контейнера Redis.
     ports:
-      - "6379:6379"
+      - "6333:6333"
     networks:
       - app_network
-    volumes:
+    volumes: # Создаем том с именем redis_data, который будет использоваться для хранения данных Redis
       - redis_data:/data
 
-networks:
+networks: # Определяет сети, которые будут использоваться для связи между контейнерами
   app_network:
     driver: bridge
 
-volumes:
+volumes: # Томы позволяют сохранять данные между перезапусками контейнеров
   redis_data:

@@ -12,7 +12,7 @@ COPY . .
 
 # Build the executable with CGO disabled
 RUN CGO_ENABLED=0 go build -o bin/main src/*.go
-RUN mv config.example.yml ./bin/config.yml
+RUN mv config.yml ./bin/config.yml
 
 
 #######################
