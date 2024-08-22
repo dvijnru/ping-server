@@ -15,6 +15,7 @@ var (
 		Environment: "production",
 		Host:        "127.0.0.1",
 		Port:        3001,
+		MongoDB:     nil,
 		Redis:       nil,
 		Cache: ConfigCache{
 			EnableLocks:           true,
@@ -31,6 +32,7 @@ type Config struct {
 	Environment string      `yaml:"environment"`
 	Host        string      `yaml:"host"`
 	Port        uint16      `yaml:"port"`
+	MongoDB     *string     `yaml:"mongodb"`
 	Redis       *string     `yaml:"redis"`
 	Cache       ConfigCache `yaml:"cache"`
 }
@@ -91,6 +93,10 @@ func (c *Config) overrideWithEnvVars() error {
 
 	if value := os.Getenv("REDIS_URL"); value != "" {
 		c.Redis = &value
+	}
+
+	if value := os.Getenv("MONGO_URL"); value != "" {
+		c.MongoDB = &value
 	}
 
 	return nil

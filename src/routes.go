@@ -6,14 +6,16 @@ import (
 	"main/src/assets"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/favicon"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/recover"
-	"github.com/mcstatus-io/mcutil/v3"
-	"github.com/mcstatus-io/mcutil/v3/options"
+	"github.com/mcstatus-io/mcutil/v4/options"
+	"github.com/mcstatus-io/mcutil/v4/util"
+	"github.com/mcstatus-io/mcutil/v4/vote"
 )
 
 func init() {
@@ -25,13 +27,13 @@ func init() {
 		Data: assets.Favicon,
 	}))
 
-	app.Use(cors.New(cors.Config{
-		AllowOrigins:  "*",
-		AllowMethods:  "HEAD,OPTIONS,GET,POST",
-		ExposeHeaders: "X-Cache-Hit,X-Cache-Time-Remaining",
-	}))
-
 	if config.Environment == "development" {
+		app.Use(cors.New(cors.Config{
+			AllowOrigins:  "*",
+			AllowMethods:  "HEAD,OPTIONS,GET,POST",
+			ExposeHeaders: "X-Cache-Hit,X-Cache-Time-Remaining",
+		}))
+
 		app.Use(logger.New(logger.Config{
 			Format:     "${time} ${ip}:${port} -> ${status}: ${method} ${path} (${latency})\n",
 			TimeFormat: "2006/01/02 15:04:05",
@@ -59,17 +61,25 @@ func JavaStatusHandler(ctx *fiber.Ctx) error {
 		return err
 	}
 
-	host, port, err := ParseAddress(ctx.Params("address"), 25565)
+	hostname, port, err := ParseAddress(strings.ToLower(ctx.Params("address")), util.DefaultJavaPort)
 
 	if err != nil {
 		return ctx.Status(http.StatusBadRequest).SendString("Invalid address value")
 	}
 
-	if err = r.Increment(fmt.Sprintf("java-hits:%s-%d", host, port)); err != nil {
+	authorized, err := Authenticate(ctx)
+
+	// This check should work for both scenarios, because nil should be returned if the user
+	// is unauthorized, and err will be nil in that case.
+	if err != nil || !authorized {
 		return err
 	}
 
-	response, expiresAt, err := GetJavaStatus(host, port, opts)
+	if err = r.Increment(fmt.Sprintf("java-hits:%s", fmt.Sprintf("%s:%d", hostname, port))); err != nil {
+		return err
+	}
+
+	response, expiresAt, err := GetJavaStatus(hostname, port, opts)
 
 	if err != nil {
 		return err
@@ -92,17 +102,17 @@ func BedrockStatusHandler(ctx *fiber.Ctx) error {
 		return err
 	}
 
-	host, port, err := ParseAddress(ctx.Params("address"), 19132)
+	hostname, port, err := ParseAddress(strings.ToLower(ctx.Params("address")), util.DefaultBedrockPort)
 
 	if err != nil {
 		return ctx.Status(http.StatusBadRequest).SendString("Invalid address value")
 	}
 
-	if err = r.Increment(fmt.Sprintf("bedrock-hits:%s-%d", host, port)); err != nil {
+	if err = r.Increment(fmt.Sprintf("bedrock-hits:%s", fmt.Sprintf("%s:%d", hostname, port))); err != nil {
 		return err
 	}
 
-	response, expiresAt, err := GetBedrockStatus(host, port, opts)
+	response, expiresAt, err := GetBedrockStatus(hostname, port, opts)
 
 	if err != nil {
 		return err
@@ -125,13 +135,13 @@ func IconHandler(ctx *fiber.Ctx) error {
 		return err
 	}
 
-	host, port, err := ParseAddress(ctx.Params("address"), 25565)
+	hostname, port, err := ParseAddress(strings.ToLower(ctx.Params("address")), util.DefaultJavaPort)
 
 	if err != nil {
 		return ctx.Status(http.StatusBadRequest).SendString("Invalid address value")
 	}
 
-	icon, expiresAt, err := GetServerIcon(host, port, opts)
+	icon, expiresAt, err := GetServerIcon(hostname, port, opts)
 
 	if err != nil {
 		return err
@@ -159,41 +169,20 @@ func SendVoteHandler(ctx *fiber.Ctx) error {
 		return ctx.Status(http.StatusBadRequest).SendString(err.Error())
 	}
 
-	switch opts.Version {
-	case 1:
-		{
-			c, cancel := context.WithTimeout(context.Background(), opts.Timeout)
+	c, cancel := context.WithTimeout(context.Background(), opts.Timeout)
 
-			defer cancel()
+	defer cancel()
 
-			if err = mcutil.SendVote(c, opts.Host, opts.Port, options.Vote{
-				PublicKey:   opts.PublicKey,
-				ServiceName: opts.ServiceName,
-				Username:    opts.Username,
-				IPAddress:   opts.IPAddress,
-				Timestamp:   opts.Timestamp,
-				Timeout:     opts.Timeout,
-			}); err != nil {
-				return ctx.Status(http.StatusBadRequest).SendString(err.Error())
-			}
-		}
-	case 2:
-		{
-			c, cancel := context.WithTimeout(context.Background(), opts.Timeout)
-
-			defer cancel()
-
-			if err = mcutil.SendVote(c, opts.Host, opts.Port, options.Vote{
-				ServiceName: opts.ServiceName,
-				Username:    opts.Username,
-				Token:       opts.Token,
-				UUID:        opts.UUID,
-				Timestamp:   opts.Timestamp,
-				Timeout:     opts.Timeout,
-			}); err != nil {
-				return ctx.Status(http.StatusBadRequest).SendString(err.Error())
-			}
-		}
+	if err = vote.SendVote(c, opts.Host, opts.Port, options.Vote{
+		PublicKey:   opts.PublicKey,
+		Token:       opts.Token,
+		ServiceName: opts.ServiceName,
+		Username:    opts.Username,
+		IPAddress:   opts.IPAddress,
+		Timestamp:   opts.Timestamp,
+		Timeout:     opts.Timeout,
+	}); err != nil {
+		return ctx.Status(http.StatusBadRequest).SendString(err.Error())
 	}
 
 	return ctx.Status(http.StatusOK).SendString("The vote was successfully sent to the server")

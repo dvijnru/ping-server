@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/rand"
 	"crypto/sha1"
 	_ "embed"
 	"encoding/hex"
@@ -19,17 +20,17 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"go.mongodb.org/mongo-driver/bson"
 )
 
 var (
 	blockedServers *MutexArray[string] = nil
-	hostRegEx      *regexp.Regexp      = regexp.MustCompile(`^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+(:\d{1,5})?$`)
+	hostRegEx      *regexp.Regexp      = regexp.MustCompile(`^[A-Za-z0-9-_]+(\.[A-Za-z0-9-_]+)+(:\d{1,5})?$`)
 	ipAddressRegEx *regexp.Regexp      = regexp.MustCompile(`^\d{1,3}(\.\d{1,3}){3}$`)
 )
 
 // VoteOptions is the options provided as query parameters to the vote route.
 type VoteOptions struct {
-	Version     int
 	IPAddress   string
 	Host        string
 	Port        uint16
@@ -152,15 +153,6 @@ func ParseAddress(address string, defaultPort uint16) (string, uint16, error) {
 func GetVoteOptions(ctx *fiber.Ctx) (*VoteOptions, error) {
 	result := VoteOptions{}
 
-	// Version
-	{
-		result.Version = ctx.QueryInt("version", 2)
-
-		if result.Version < 0 || result.Version > 2 {
-			return nil, fmt.Errorf("invalid 'version' query parameter: %d", result.Version)
-		}
-	}
-
 	// Host
 	{
 		result.Host = ctx.Query("host")
@@ -203,19 +195,11 @@ func GetVoteOptions(ctx *fiber.Ctx) (*VoteOptions, error) {
 	// Public Key
 	{
 		result.PublicKey = ctx.Query("publickey")
-
-		if result.Version == 1 && len(result.PublicKey) < 1 {
-			return nil, fmt.Errorf("invalid 'publickey' query parameter: %s", result.PublicKey)
-		}
 	}
 
 	// Token
 	{
 		result.Token = ctx.Query("token")
-
-		if result.Version == 2 && len(result.Token) < 1 {
-			return nil, fmt.Errorf("invalid 'token' query parameter: %s", result.Token)
-		}
 	}
 
 	// IP Address
@@ -245,9 +229,15 @@ func GetVoteOptions(ctx *fiber.Ctx) (*VoteOptions, error) {
 		result.Timeout = time.Duration(math.Max(float64(time.Second)*ctx.QueryFloat("timeout", 5.0), float64(time.Millisecond*250)))
 	}
 
+	// Test token and public key parameters
+	if len(result.Token) < 1 && len(result.PublicKey) < 1 {
+		return nil, errors.New("query parameter 'token', 'publickey' or both must have a value, but both were empty")
+	}
+
 	return &result, nil
 }
 
+// GetStatusOptions returns the options for status routes, with the default values filled in.
 func GetStatusOptions(ctx *fiber.Ctx) (*StatusOptions, error) {
 	result := &StatusOptions{}
 
@@ -280,9 +270,9 @@ func GetInstanceID() (uint16, error) {
 }
 
 // GetCacheKey generates a unique key used for caching status results in Redis.
-func GetCacheKey(host string, port uint16, opts *StatusOptions) string {
+func GetCacheKey(hostname string, port uint16, opts *StatusOptions) string {
 	values := &url.Values{}
-	values.Set("host", host)
+	values.Set("hostname", hostname)
 	values.Set("port", strconv.FormatUint(uint64(port), 10))
 
 	if opts != nil {
@@ -290,6 +280,71 @@ func GetCacheKey(host string, port uint16, opts *StatusOptions) string {
 	}
 
 	return SHA256(values.Encode())
+}
+
+// Authenticate checks and requires authentication for the current request, by finding the token.
+func Authenticate(ctx *fiber.Ctx) (bool, error) {
+	if config.MongoDB == nil {
+		return true, nil
+	}
+
+	authToken := ctx.Get("Authorization")
+
+	if len(authToken) < 1 {
+		if err := ctx.Status(http.StatusUnauthorized).SendString("Missing 'Authorization' header in request"); err != nil {
+			return false, err
+		}
+
+		return false, nil
+	}
+
+	token, err := db.GetTokenByToken(authToken)
+
+	if err != nil {
+		return false, err
+	}
+
+	if token == nil {
+		if err := ctx.Status(http.StatusUnauthorized).SendString("Invalid or expired authorization token, please generate another one in the dashboard"); err != nil {
+			return false, err
+		}
+
+		return false, nil
+	}
+
+	if err = db.IncrementApplicationRequestCount(token.Application); err != nil {
+		return false, err
+	}
+
+	if err = db.UpdateToken(
+		token.ID,
+		bson.M{
+			"$inc": bson.M{"requestCount": 1},
+			"$set": bson.M{"lastUsedAt": time.Now().UTC()},
+		},
+	); err != nil {
+		return false, err
+	}
+
+	if err = db.UpsertRequestLog(
+		bson.M{
+			"application": token.Application,
+			"timestamp":   GetStartOfHour(),
+			"token":       token.ID,
+		},
+		bson.M{
+			"$setOnInsert": bson.M{
+				"_id": RandomHexString(16),
+			},
+			"$inc": bson.M{
+				"requestCount": 1,
+			},
+		},
+	); err != nil {
+		return false, err
+	}
+
+	return true, nil
 }
 
 // SHA256 returns the result of hashing the input value using SHA256 algorithm.
@@ -324,4 +379,20 @@ func Map[I, O any](arr []I, f func(I) O) []O {
 	}
 
 	return result
+}
+
+// GetStartOfHour returns the current date and time rounded down to the start of the hour.
+func GetStartOfHour() time.Time {
+	return time.Now().UTC().Truncate(time.Hour)
+}
+
+// RandomHexString returns a random hexadecimal string with the specified byte length.
+func RandomHexString(byteLength int) string {
+	data := make([]byte, byteLength)
+
+	if _, err := rand.Read(data); err != nil {
+		panic(err)
+	}
+
+	return hex.EncodeToString(data)
 }
